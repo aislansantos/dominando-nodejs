@@ -1,0 +1,197 @@
+import * as Yup from "yup";
+import { Op } from "sequelize";
+import { parseISO } from "date-fns";
+
+import User from "../models/User";
+
+class UserController {
+    async index(req, res) {
+        const {
+            name,
+            email,
+            createdBefore,
+            createdAfter,
+            updatedBefore,
+            updatedAfter,
+            sort,
+        } = req.query;
+
+        const page = req.query.page || 1;
+        const limit = req.query.limit || 25;
+
+        let where = {};
+        let order = [];
+
+        if (name) {
+            where = {
+                ...where,
+                name: {
+                    [Op.iLike]: name,
+                },
+            };
+        }
+        if (email) {
+            where = {
+                ...where,
+                email: {
+                    [Op.iLike]: email,
+                },
+            };
+        }
+        if (createdBefore) {
+            where = {
+                ...where,
+                createdAt: {
+                    [Op.gte]: parseISO(createdBefore),
+                },
+            };
+        }
+        if (createdAfter) {
+            where = {
+                ...where,
+                createdAt: {
+                    [Op.lte]: parseISO(createdAfter),
+                },
+            };
+        }
+
+        if (updatedBefore) {
+            where = {
+                ...where,
+                updatedAt: {
+                    [Op.gte]: parseISO(updatedBefore),
+                },
+            };
+        }
+
+        if (updatedAfter) {
+            where = {
+                ...where,
+                updatedAt: {
+                    [Op.lte]: parseISO(updatedAfter),
+                },
+            };
+        }
+
+        console.log(where);
+
+        if (sort) {
+            order = sort.split(",").map((item) => item.split(":"));
+        }
+
+        const data = await User.findAll({
+            attributes: { exclude: ["password_hash", "password"] },
+            where,
+            order,
+            limit,
+            offset: limit * page - limit,
+        });
+        //! Para teste retorannaod dados do user Logado, mostrando somente id,nome,email com exclude.
+        const userLogged = await User.findByPk(req.userID, {
+            attributes: {
+                exclude: [
+                    "password_hash",
+                    "password",
+                    "createdAt",
+                    "updatedAt",
+                ],
+            },
+        });
+        console.log({ userID: req.userID });
+
+        return res.status(200).json({ User: data, userLogged });
+    }
+
+    async show(req, res) {
+        const user = await User.findByPk(req.params.id);
+
+        if (!user) {
+            return res.status(404).json();
+        }
+
+        const { id, name, email, createdAt, updatedAt } = user;
+
+        return res.status(201).json({ id, name, email, createdAt, updatedAt });
+    }
+
+    async create(req, res) {
+        const schema = Yup.object().shape({
+            name: Yup.string().required(),
+            email: Yup.string().email().required(),
+            password: Yup.string().required().min(8),
+            passwordConfirmation: Yup.string().when(
+                "password",
+                (password, field) =>
+                    password
+                        ? field.required().oneOf([Yup.ref("password")])
+                        : field,
+            ),
+        });
+        // Validar o schema com o req.body
+        if (!(await schema.isValid(req.body))) {
+            return res.status(400).json({ error: "Error on validate schema" });
+        }
+
+        // Dentro do req.body estão todos os dados em formato de json, que serão necessários para o cadastro novo.
+        const { id, name, email, createdAt, updatedAt } = await User.create(
+            req.body,
+        );
+
+        return res.status(200).json({ id, name, email, createdAt, updatedAt });
+    }
+
+    async update(req, res) {
+        const schema = Yup.object().shape({
+            name: Yup.string(),
+            email: Yup.string().email(),
+            oldPassword: Yup.string().min(8),
+            password: Yup.string()
+                .min(8)
+                .when("oldPassword", (oldPassword, field) =>
+                    oldPassword ? field.required() : field,
+                ),
+            passwordConfirmation: Yup.string().when(
+                "password",
+                (password, field) =>
+                    password
+                        ? field.required().oneOf([Yup.ref("password")])
+                        : field,
+            ),
+        });
+
+        if (!(await schema.isValid(req.body))) {
+            return res.status(400).json({ error: "Error on validate schema." });
+        }
+
+        const user = await User.findByPk(req.params.id);
+
+        if (!user) {
+            return res.status(404).json();
+        }
+
+        const { oldPassword } = req.body;
+
+        if (oldPassword && !(await user.checkPassword(oldPassword))) {
+            return res.status(401).json({ error: "User password not match." });
+        }
+
+        const { id, name, email, createdAt, updatedAt } = await user.update(
+            req.body,
+        );
+
+        return res.status(201).json({ id, name, email, createdAt, updatedAt });
+    }
+
+    async destroy(req, res) {
+        const user = await User.findByPk(req.params.id);
+
+        if (!user) {
+            return res.status(404).json();
+        }
+
+        await user.destroy();
+
+        return res.json(); // Quando não se coloca status o padrão é 200.
+    }
+}
+export default new UserController();
